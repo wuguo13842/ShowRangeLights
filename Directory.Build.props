@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <!-- 导入用户本地配置 -->
+  <Import Project="Directory.Build.props.user" Condition="Exists('Directory.Build.props.user')" />
+  
+  <!-- 如果 .user 文件不存在，使用默认值 -->
+  <Import Project="Directory.Build.props.default" Condition="!Exists('Directory.Build.props.user')" />
+</Project>
