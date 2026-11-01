@@ -76,6 +76,7 @@
   </ItemGroup>
   <!-- 包含你的代码文件 -->
   <ItemGroup>
+    <Compile Include="LightBorderRenderer.cs" />
     <Compile Include="Mod.cs" />
     <Compile Include="LightRangeVisualizer.cs" />
     <Compile Include="PLibCompat.cs" />

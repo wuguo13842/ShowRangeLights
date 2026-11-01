@@ -2,7 +2,7 @@ using HarmonyLib;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace ShowRangeLights { // 如果是独立 Mod 请保持 ShowRangeLights
+namespace ShowRangeLights { // 独立 Mod 命名空间
 	internal sealed class LightRangeVisualizer : KMonoBehaviour {
 		private const string ANIM_NAME = "transferarmgrid_kanim";
 		private static readonly HashedString[] PRE_ANIMS = { "grid_pre", "grid_loop" };
@@ -13,6 +13,9 @@ namespace ShowRangeLights { // 如果是独立 Mod 请保持 ShowRangeLights
 		private const int SELECTION_CHANGED_EVENT = -1503271301;
 
 		private static int terrainVersion = 0;
+
+		// 同一时刻只允许一个 visualizer 拥有边框，避免多个 SyncCells 互相覆盖
+		private static LightRangeVisualizer borderOwner;
 
 		internal static void IncrementTerrainVersion() {
 			terrainVersion++;
@@ -83,6 +86,31 @@ namespace ShowRangeLights { // 如果是独立 Mod 请保持 ShowRangeLights
 				enabled = boxed.value;
 		}
 
+		// 边框所有权管理：
+		// 同一时刻只允许一个 visualizer 写边框，否则多个 visualizer 的 SyncCells
+		// 会互相覆盖，导致"边框来自 A、内部网格来自 B"的错位。
+		private void ReleaseBorderOwnership() {
+			if (borderOwner == this) {
+				borderOwner = null;
+				LightBorderRenderer.Clear();
+			}
+		}
+
+		private bool TryAcquireBorderOwnership() {
+			if (borderOwner == null || borderOwner == this) {
+				borderOwner = this;
+				return true;
+			}
+			// 抢占规则：真实建筑（选中）优先于建造预览
+			bool selfIsReal = !defaultEnabled;
+			bool ownerIsReal = !borderOwner.defaultEnabled;
+			if (selfIsReal && !ownerIsReal) {
+				borderOwner = this;
+				return true;
+			}
+			return false;
+		}
+
 		// 双保险：
 		// 1. enabled 由 OnSpawn / OnSelectionChanged 精确控制（大开关）
 		// 2. Update 里再检查一次是否真的该 active（防止 instantiateFn 到 OnSpawn
@@ -95,6 +123,7 @@ namespace ShowRangeLights { // 如果是独立 Mod 请保持 ShowRangeLights
 					active = true;
 			}
 			if (!active) {
+				ReleaseBorderOwnership();
 				if (cells.Count > 0)
 					ClearAll();
 				return;
@@ -102,13 +131,24 @@ namespace ShowRangeLights { // 如果是独立 Mod 请保持 ShowRangeLights
 
 			int origin = Grid.PosToCell(transform.GetPosition() + (Vector3)offset);
 			if (range <= 0 || !Grid.IsValidCell(origin)) {
+				ReleaseBorderOwnership();
 				if (cells.Count > 0)
 					ClearAll();
 				return;
 			}
 
 			// 只在 origin 或地形版本变化时重算 GetVisibleCells 并重建 cells 集合。
-			if (origin != lastOrigin || terrainVersion != lastTerrainVersion) {
+			// 另外，当本 visualizer 刚获得边框所有权时也强制重算一次，
+			// 以保证边框和内部网格始终来自同一份数据。
+			bool needRecalc = origin != lastOrigin || terrainVersion != lastTerrainVersion;
+			bool isBorderOwner = borderOwner == this;
+			if (!isBorderOwner) {
+				if (TryAcquireBorderOwnership()) {
+					isBorderOwner = true;
+					needRecalc = true;
+				}
+			}
+			if (needRecalc) {
 				lastOrigin = origin;
 				lastTerrainVersion = terrainVersion;
 
@@ -155,6 +195,14 @@ namespace ShowRangeLights { // 如果是独立 Mod 请保持 ShowRangeLights
 					if (ctrl == null)
 						continue;
 					cells[c] = ctrl;
+				}
+
+				// ==========================================
+				// 【新增】：同步给边框渲染器，让它在外围画虚线
+				// 只有边框 owner 才写，保证边框与内部网格一致
+				// ==========================================
+				if (isBorderOwner) {
+					LightBorderRenderer.SyncCells(cachedNewCells, origin, terrainVersion);
 				}
 			}
 		}
@@ -203,6 +251,7 @@ namespace ShowRangeLights { // 如果是独立 Mod 请保持 ShowRangeLights
 
 		protected override void OnDisable() {
 			base.OnDisable();
+			ReleaseBorderOwnership();
 			ClearAll();
 		}
 
@@ -211,6 +260,7 @@ namespace ShowRangeLights { // 如果是独立 Mod 请保持 ShowRangeLights
 				Unsubscribe(SELECTION_CHANGED_EVENT, OnSelectionChanged);
 				selectionSubscribed = false;
 			}
+			ReleaseBorderOwnership();
 			ClearAll();
 			while (effectPool.Count > 0) {
 				var ctrl = effectPool.Pop();
@@ -306,6 +356,16 @@ namespace ShowRangeLights { // 如果是独立 Mod 请保持 ShowRangeLights
 						LightRangeVisualizer.EnsureOn(def.BuildingUnderConstruction, def, false);
 					LightRangeVisualizer.EnsureOn(def.BuildingComplete, def, false);
 				}
+			}
+		}
+
+		// ==========================================
+		// 【新增】：把边框渲染器挂到相机的后处理层级
+		// ==========================================
+		[HarmonyPatch(typeof(CameraController), "OnPrefabInit")]
+		public static class CameraController_OnPrefabInit_Patch {
+			internal static void Postfix(CameraController __instance) {
+				LightBorderRenderer.EnsureOn(__instance.overlayNoDepthCamera);
 			}
 		}
 	}
