@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
-  
   <PropertyGroup>
     <!-- ========================================== -->
     <!-- ⚠️ 注意：请把下面两行的路径改成你自己电脑的路径！ -->
@@ -9,11 +8,10 @@
     <GameLibsFolder>S:\SteamLibrary\steamapps\common\OxygenNotIncluded\OxygenNotIncluded_Data\Managed</GameLibsFolder>
     <ModFolder>D:\Documents\Klei\OxygenNotIncluded\mods\Dev</ModFolder>
   </PropertyGroup>
-
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>9c9c86d2-4c5d-421e-9089-0adf56116a3d</ProjectGuid>
+    <ProjectGuid>{9C9C86D2-4C5D-421E-9089-0ADF56116A3D}</ProjectGuid>
     <OutputType>Library</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>ShowRangeLights</RootNamespace>
@@ -22,7 +20,6 @@
     <FileAlignment>512</FileAlignment>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
-  
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
@@ -32,7 +29,6 @@
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
-  
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
@@ -41,18 +37,16 @@
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
-
   <ItemGroup>
-    <Reference Include="System"/>
-    <Reference Include="System.Core"/>
-    <Reference Include="System.Xml.Linq"/>
-    <Reference Include="System.Data.DataSetExtensions"/>
-    <Reference Include="Microsoft.CSharp"/>
-    <Reference Include="System.Data"/>
-    <Reference Include="System.Net.Http"/>
-    <Reference Include="System.Xml"/>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Xml" />
   </ItemGroup>
-
   <!-- 引用游戏核心 DLL -->
   <ItemGroup>
     <Reference Include="0Harmony">
@@ -80,21 +74,18 @@
       <Private>False</Private>
     </Reference>
   </ItemGroup>
-
   <!-- 包含你的代码文件 -->
   <ItemGroup>
     <Compile Include="Mod.cs" />
     <Compile Include="LightRangeVisualizer.cs" />
+    <Compile Include="PLibCompat.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
-
   <!-- 包含资源文件（翻译等） -->
   <ItemGroup>
     <TranslationFiles Include="ModAssets\translations\*.po" />
   </ItemGroup>
-
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-
   <!-- Mod 信息配置 -->
   <PropertyGroup>
     <MinimumSupportedBuild>744825</MinimumSupportedBuild>
@@ -105,28 +96,21 @@
     <ModDescription>Adds light range visualization for CeilingLights, Lamps, LightBugs, etc.</ModDescription>
     <ModVersion>1.0.0</ModVersion>
   </PropertyGroup>
-
   <!-- 编译后自动生成 Mod 文件夹并复制 DLL -->
   <Target Name="CopyModToGame" AfterTargets="Build">
     <PropertyGroup>
       <ProjectModFolder>$(ModFolder)\$(AssemblyName)</ProjectModFolder>
     </PropertyGroup>
-    
     <MakeDir Directories="$(ProjectModFolder)" Condition="!Exists('$(ProjectModFolder)')" />
-    
     <!-- 自动生成 mod_info.yaml -->
     <WriteLinesToFile File="$(ProjectModFolder)\mod_info.yaml" Overwrite="true" Encoding="UTF-8" Lines="minimumSupportedBuild: $(MinimumSupportedBuild);APIVersion: $(APIVersion);supportedContent: $(SupportedContent);version: &quot;$(ModVersion)&quot;" />
-    
     <!-- 自动生成 mod.yaml -->
     <WriteLinesToFile File="$(ProjectModFolder)\mod.yaml" Overwrite="true" Encoding="UTF-8" Lines="title: &quot;$(ModTitle)&quot;;description: &quot;$(ModDescription)&quot;;staticID: $(ModStaticID)" />
-    
     <!-- 复制编译好的 DLL 和 PDB -->
     <Copy SourceFiles="$(MSBuildProjectDirectory)\$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ProjectModFolder)" />
     <Copy SourceFiles="$(MSBuildProjectDirectory)\$(OutputPath)$(AssemblyName).pdb" DestinationFolder="$(ProjectModFolder)" Condition="Exists('$(MSBuildProjectDirectory)\$(OutputPath)$(AssemblyName).pdb')" />
-    
     <!-- 复制预览图 preview.png（从 ModAssets/assets 目录） -->
     <Copy SourceFiles="ModAssets\assets\preview.png" DestinationFolder="$(ProjectModFolder)" Condition="Exists('ModAssets\assets\preview.png')" />
-    
     <!-- 复制翻译文件（如果存在） -->
     <Copy SourceFiles="@(TranslationFiles)" DestinationFolder="$(ProjectModFolder)\translations\" Condition="Exists('ModAssets\translations')" />
   </Target>

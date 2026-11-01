@@ -2,7 +2,7 @@ using HarmonyLib;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace ShowRangeLights { // 仅改了这里，防止和原版冲突
+namespace ShowRangeLights { // 如果是独立 Mod 请保持 ShowRangeLights
 	internal sealed class LightRangeVisualizer : KMonoBehaviour {
 		private const string ANIM_NAME = "transferarmgrid_kanim";
 		private static readonly HashedString[] PRE_ANIMS = { "grid_pre", "grid_loop" };
@@ -113,8 +113,26 @@ namespace ShowRangeLights { // 仅改了这里，防止和原版冲突
 				lastTerrainVersion = terrainVersion;
 
 				buffer.Clear();
-				DiscreteShadowCaster.GetVisibleCells(origin, buffer, range, width,
-					direction, shape, true);
+				bool handled = false;
+
+				// 1. 如果是 PLib 自定义形状（大于原版 Quad），尝试交由 PLibCompat 处理
+				if ((int)shape > (int)LightShape.Quad) {
+					try {
+						handled = PLibCompat.TryGetVisibleCells(gameObject, origin, range, buffer, shape);
+					} catch {
+						handled = false; // 绝对兜底，哪怕 PLibCompat 出任何意外也不崩
+					}
+				}
+
+				// 2. 如果不是自定义形状，或者 PLib 未加载/处理失败，走原版逻辑
+				if (!handled) {
+					LightShape scanShape = shape;
+					// 兜底：如果遇到未知形状且没有 PLib，降级为圆形范围，防止原版 API 报错
+					if ((int)scanShape > (int)LightShape.Quad) {
+						scanShape = LightShape.Circle;
+					}
+					DiscreteShadowCaster.GetVisibleCells(origin, buffer, range, width, direction, scanShape, true);
+				}
 
 				cachedNewCells.Clear();
 				foreach (int c in buffer)
