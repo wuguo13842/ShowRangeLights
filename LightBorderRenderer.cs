@@ -23,7 +23,6 @@ namespace ShowRangeLights {
 			if (instance == null) return;
 			instance.currentCells.Clear();
 			instance.lastOrigin = Grid.InvalidCell;
-			instance.lastTerrainVersion = -1;
 		}
 
 		private Camera cachedCamera;
@@ -32,7 +31,9 @@ namespace ShowRangeLights {
 
 		private readonly HashSet<int> currentCells = new HashSet<int>();
 		private int lastOrigin = Grid.InvalidCell;
-		private int lastTerrainVersion = -1;
+
+		// 脏标记：只有 currentCells / lastOrigin 变化时才重写纹理，静止时省 Apply 开销
+		private bool dirty = true;
 
 		private readonly int propHighlightColor;
 		private readonly int propOcclusionParams;
@@ -71,38 +72,45 @@ namespace ShowRangeLights {
 			instance.currentCells.Clear();
 			foreach (var c in cells) instance.currentCells.Add(c);
 			instance.lastOrigin = origin;
-			instance.lastTerrainVersion = terrainVer;
+			instance.dirty = true;
 		}
 
 		internal void OnPostRender() {
 			if (shader == null || currentCells.Count == 0 || lastOrigin == Grid.InvalidCell) return;
 
-			// 将格子写入 Alpha8 纹理
-			var pixels = occlusionTexture.GetRawTextureData<byte>();
-			int dia = OCCLUSION_WIDTH, half = dia / 2;
-			for (int i = 0; i < pixels.Length; i++) pixels[i] = 0;
+			// 脏标记：只有数据变化时才重写 Alpha8 纹理，静止时每帧只做 GL 绘制
+			if (dirty) {
+				var pixels = occlusionTexture.GetRawTextureData<byte>();
+				int dia = OCCLUSION_WIDTH, half = dia / 2;
+				for (int i = 0; i < pixels.Length; i++) pixels[i] = 0;
 
-			// 【关键修复】CellToXY 接受 cell 索引，PosToXY 只接受 Vector3
-			Grid.CellToXY(lastOrigin, out int ox, out int oy);
-			int startX = ox - half;
-			int startY = oy - half;
+				// CellToXY 接受 cell 索引；PosToXY 只接受 Vector3
+				Grid.CellToXY(lastOrigin, out int ox, out int oy);
+				int startX = ox - half;
+				int startY = oy - half;
 
-			foreach (int c in currentCells) {
-				Grid.CellToXY(c, out int cx, out int cy);
-				int px = cx - startX;
-				int py = cy - startY;
-				if (px >= 0 && px < OCCLUSION_WIDTH && py >= 0 && py < OCCLUSION_HEIGHT) {
-					pixels[py * OCCLUSION_WIDTH + px] = byte.MaxValue;
+				foreach (int c in currentCells) {
+					Grid.CellToXY(c, out int cx, out int cy);
+					int px = cx - startX;
+					int py = cy - startY;
+					if (px >= 0 && px < OCCLUSION_WIDTH && py >= 0 && py < OCCLUSION_HEIGHT) {
+						pixels[py * OCCLUSION_WIDTH + px] = byte.MaxValue;
+					}
 				}
+				occlusionTexture.Apply(false, false);
+				dirty = false;
 			}
-			occlusionTexture.Apply(false, false);
+
+			// 下面这些每帧都得跑，因为相机位置可能改变
+			Grid.CellToXY(lastOrigin, out int ox2, out int oy2);
+			int half2 = OCCLUSION_WIDTH / 2;
 
 			// 设置 Shader 参数
 			shader.SetColor(propHighlightColor, new Color(1f, 1f, 0f, 1f)); // 黄色
 			shader.SetVector(propOcclusionParams, new Vector4(1.0f / OCCLUSION_WIDTH, 1.0f / OCCLUSION_HEIGHT, 0, 0));
 			shader.SetVector(propWorldParams, new Vector4(Grid.WidthInCells, Grid.HeightInCells, 1.0f / Grid.WidthInCells, 1.0f / Grid.HeightInCells));
 			shader.SetTexture(propOcclusionTex, occlusionTexture);
-			shader.SetVector(propRangeParams, new Vector4(ox - half, oy - half, ox + half, oy + half));
+			shader.SetVector(propRangeParams, new Vector4(ox2 - half2, oy2 - half2, ox2 + half2, oy2 + half2));
 
 			var bottomLeft = cachedCamera.ViewportToWorldPoint(Vector3.zero);
 			var topRight = cachedCamera.ViewportToWorldPoint(Vector3.one);

@@ -31,6 +31,10 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 		// 是否在 OnSpawn 后立即启用（BuildingPreview 为 true；其它为 false）
 		internal bool defaultEnabled;
 
+		// 缓存的 KSelectable。用 GetComponentInParent 以覆盖「Light2D 和 KSelectable 分层」
+		// 的模组实体。不缓存 null：组件可能后到，Update 会再查一次。
+		private KSelectable cachedSelectable;
+
 		// 是否已经订阅选中事件（避免重复订阅）
 		private bool selectionSubscribed;
 
@@ -64,26 +68,44 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 		// OnSpawn 在 Awake → Start 之后被调用，此时 obj 已就绪，可以安全订阅。
 		protected override void OnSpawn() {
 			base.OnSpawn();
-			if (!selectionSubscribed) {
-				selectionSubscribed = true;
-				Subscribe(SELECTION_CHANGED_EVENT, OnSelectionChanged);
-			}
 
-			// defaultEnabled=true（BuildingPreview）：保持 enabled=true
-			// defaultEnabled=false（BuildingComplete / UnderConstruction）：
-			//   enabled = KSelectable.IsSelected
-			if (defaultEnabled) {
-				enabled = true;
-			} else {
-				var ks = GetComponent<KSelectable>();
-				enabled = ks != null && ks.IsSelected;
+			// 【关键】enabled 永远保持 true，由 Update 内部的 active 决定是否绘制。
+			// 若在 OnSpawn 时因未选中而设 enabled = false，Unity 将不再调用 Update，
+			// 取消选中后的清理逻辑会变成死代码；且若 cachedSelectable 为空
+			// （组件后到），enabled = false 会导致 visualizer 永久死锁。
+			enabled = true;
+
+			TrySubscribe();
+		}
+
+		// 尝试查找 KSelectable 并订阅选中事件。
+		// 对 defaultEnabled（BuildingPreview）直接返回：它的 active 恒为 true，
+		// 不依赖 IsSelected，订阅反而会在父对象取消选中时误触 ReleaseBorderOwnership。
+		private void TrySubscribe() {
+			if (selectionSubscribed)
+				return;
+			if (defaultEnabled)
+				return;
+
+			if (cachedSelectable == null)
+				cachedSelectable = GetComponentInParent<KSelectable>();
+
+			if (cachedSelectable != null) {
+				selectionSubscribed = true;
+				// 订阅目标必须是 KSelectable 所在的 GameObject，否则收不到它广播的事件
+				Subscribe(cachedSelectable.gameObject, SELECTION_CHANGED_EVENT,
+					OnSelectionChanged);
 			}
 		}
 
 		private void OnSelectionChanged(object data) {
 			var boxed = data as Boxed<bool>;
-			if (boxed != null)
-				enabled = boxed.value;
+			if (boxed != null && !boxed.value) {
+				// 取消选中时提前释放边框，避免边框残留到下一帧 Update 才清。
+				// 内部网格仍由下一帧 Update 的 !active 分支清理（事件回调里做销毁
+				// 有重入/卡顿风险，不在这里做）。
+				ReleaseBorderOwnership();
+			}
 		}
 
 		// 边框所有权管理：
@@ -112,16 +134,18 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 		}
 
 		// 双保险：
-		// 1. enabled 由 OnSpawn / OnSelectionChanged 精确控制（大开关）
-		// 2. Update 里再检查一次是否真的该 active（防止 instantiateFn 到 OnSpawn
-		//    之间一帧的错显，那段时间 enabled 还是 Unity 默认的 true）
+		// 1. active 由 defaultEnabled / IsSelected 计算
+		// 2. Update 每帧都跑（enabled 恒为 true），确保取消选中后能执行清理
 		private void Update() {
+			// 组件后到场景：OnSpawn 时没找到 KSelectable，这里每帧补一次
+			if (!selectionSubscribed)
+				TrySubscribe();
+
 			bool active = defaultEnabled;
-			if (!active) {
-				var ks = GetComponent<KSelectable>();
-				if (ks != null && ks.IsSelected)
-					active = true;
-			}
+			if (!active && cachedSelectable != null && cachedSelectable.IsSelected)
+				active = true;
+
+			// 不 active 时清理内部网格并释放边框（此处不再是死代码）
 			if (!active) {
 				ReleaseBorderOwnership();
 				if (cells.Count > 0)
@@ -198,7 +222,7 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 				}
 
 				// ==========================================
-				// 【新增】：同步给边框渲染器，让它在外围画虚线
+				// 同步给边框渲染器，让它在外围画虚线
 				// 只有边框 owner 才写，保证边框与内部网格一致
 				// ==========================================
 				if (isBorderOwner) {
@@ -256,10 +280,11 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 		}
 
 		protected override void OnCleanUp() {
-			if (selectionSubscribed) {
-				Unsubscribe(SELECTION_CHANGED_EVENT, OnSelectionChanged);
+			if (selectionSubscribed && cachedSelectable != null) {
+				Unsubscribe(cachedSelectable.gameObject, SELECTION_CHANGED_EVENT, OnSelectionChanged);
 				selectionSubscribed = false;
 			}
+			cachedSelectable = null;
 			ReleaseBorderOwnership();
 			ClearAll();
 			while (effectPool.Count > 0) {
@@ -360,7 +385,7 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 		}
 
 		// ==========================================
-		// 【新增】：把边框渲染器挂到相机的后处理层级
+		// 把边框渲染器挂到相机的后处理层级
 		// ==========================================
 		[HarmonyPatch(typeof(CameraController), "OnPrefabInit")]
 		public static class CameraController_OnPrefabInit_Patch {
