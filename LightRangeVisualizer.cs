@@ -17,8 +17,42 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 		// 同一时刻只允许一个 visualizer 拥有边框，避免多个 SyncCells 互相覆盖
 		private static LightRangeVisualizer borderOwner;
 
+		// F5 光照概览检测缓存
+		private static bool lightOverlayIdInitialized;
+		private static bool lightOverlayIdValid;
+		private static HashedString lightOverlayId;
+
 		internal static void IncrementTerrainVersion() {
 			terrainVersion++;
+		}
+
+		/// <summary>
+		/// 当前是否处于 F5 光照概览模式。
+		/// 首次调用时初始化 OverlayModes.Light.ID；如果 API 不存在，
+		/// 则永远返回 false（主视图逻辑不受影响）。
+		/// </summary>
+		internal static bool IsLightOverlayActive() {
+			var overlayScreen = OverlayScreen.Instance;
+			if (overlayScreen == null)
+				return false;
+			if (!lightOverlayIdInitialized) {
+				lightOverlayIdInitialized = true;
+				try {
+					lightOverlayId = OverlayModes.Light.ID;
+					lightOverlayIdValid = true;
+				} catch {
+					lightOverlayIdValid = false;
+				}
+			}
+			if (!lightOverlayIdValid)
+				return false;
+			// OverlayScreen 在 UI 完全初始化之前，mode getter 可能抛出空引用，
+			// 这里用 try-catch 安全兜底，初始化期间视为“不在 F5 光照概览”。
+			try {
+				return overlayScreen.mode == lightOverlayId;
+			} catch {
+				return false;
+			}
 		}
 
 		internal int range;
@@ -30,6 +64,10 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 
 		// 是否在 OnSpawn 后立即启用（BuildingPreview 为 true；其它为 false）
 		internal bool defaultEnabled;
+
+		// true = 主视图不显示，F5 下选中才显示（BuildingComplete / LightBug 等）
+		// false = 主视图按 defaultEnabled / 选中状态显示
+		internal bool overlayOnly;
 
 		// 缓存的 KSelectable。用 GetComponentInParent 以覆盖「Light2D 和 KSelectable 分层」
 		// 的模组实体。不缓存 null：组件可能后到，Update 会再查一次。
@@ -75,12 +113,14 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 			// （组件后到），enabled = false 会导致 visualizer 永久死锁。
 			enabled = true;
 
+			// overlayOnly 的 visualizer 也需要订阅选中状态：F5 下选中才渲染
 			TrySubscribe();
 		}
 
 		// 尝试查找 KSelectable 并订阅选中事件。
 		// 对 defaultEnabled（BuildingPreview）直接返回：它的 active 恒为 true，
 		// 不依赖 IsSelected，订阅反而会在父对象取消选中时误触 ReleaseBorderOwnership。
+		// overlayOnly 的灯需要在 F5 下根据选中状态决定是否渲染，因此也要订阅。
 		private void TrySubscribe() {
 			if (selectionSubscribed)
 				return;
@@ -134,16 +174,27 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 		}
 
 		// 双保险：
-		// 1. active 由 defaultEnabled / IsSelected 计算
+		// 1. active 由 defaultEnabled / IsSelected / F5 状态计算
 		// 2. Update 每帧都跑（enabled 恒为 true），确保取消选中后能执行清理
 		private void Update() {
 			// 组件后到场景：OnSpawn 时没找到 KSelectable，这里每帧补一次
-			if (!selectionSubscribed)
+			if (!selectionSubscribed && !defaultEnabled)
 				TrySubscribe();
 
-			bool active = defaultEnabled;
-			if (!active && cachedSelectable != null && cachedSelectable.IsSelected)
+			// 【新增】判断当前 visualizer 应该处于什么状态
+			bool overlayActive = IsLightOverlayActive();
+			bool selected = cachedSelectable != null && cachedSelectable.IsSelected;
+			bool active;
+			if (overlayOnly) {
+				// BuildingComplete / LightBug：主视图永远不显示，F5 下选中才显示
+				active = overlayActive && selected;
+			} else if (defaultEnabled) {
+				// BuildingPreview：总是显示
 				active = true;
+			} else {
+				// BuildingUnderConstruction：选中时显示（主视图和 F5 一致）
+				active = selected;
+			}
 
 			// 不 active 时清理内部网格并释放边框（此处不再是死代码）
 			if (!active) {
@@ -155,6 +206,17 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 
 			int origin = Grid.PosToCell(transform.GetPosition() + (Vector3)offset);
 			if (range <= 0 || !Grid.IsValidCell(origin)) {
+				ReleaseBorderOwnership();
+				if (cells.Count > 0)
+					ClearAll();
+				return;
+			}
+
+			// 【新增】视野裁剪：F5 下可能有大量灯同时激活，视野外的直接跳过，
+			// 避免 100 盏灯每帧都跑 GetVisibleCells。
+			Grid.GetVisibleCellRangeInActiveWorld(out var visMin, out var visMax);
+			int cx = Grid.CellColumn(origin), cy = Grid.CellRow(origin);
+			if (cx < visMin.x || cx > visMax.x || cy < visMin.y || cy > visMax.y) {
 				ReleaseBorderOwnership();
 				if (cells.Count > 0)
 					ClearAll();
@@ -296,7 +358,7 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 		}
 
 		internal static void EnsureOn(GameObject target, BuildingDef def,
-				bool defaultEnabled) {
+				bool defaultEnabled, bool overlayOnly) {
 			if (target == null || def == null || def.BuildingComplete == null)
 				return;
 			var light = def.BuildingComplete.GetComponentInChildren<Light2D>();
@@ -320,6 +382,7 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 					vis.direction = direction;
 					vis.offset = offset;
 					vis.defaultEnabled = defaultEnabled;
+					vis.overlayOnly = overlayOnly;
 					// 刻意不在这里设置 enabled：
 					// 若立即设 enabled = false，Unity 不会调用 Start → OnSpawn，
 					// 订阅就永远不会发生。让 Unity 走完生命周期；Update 里的
@@ -344,6 +407,7 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 					vis = root.AddComponent<LightRangeVisualizer>();
 				// 通过 Light2D.OnSpawn 路径添加的 visualizer 走"选中才显示"模式
 				vis.defaultEnabled = false;
+				vis.overlayOnly = true;
 				vis.CopyFrom(__instance, root.transform);
 			}
 		}
@@ -375,11 +439,14 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 					var light = def.BuildingComplete.GetComponentInChildren<Light2D>();
 					if (light == null)
 						continue;
+					// 建造预览：主视图总是显示
 					if (def.BuildingPreview != null)
-						LightRangeVisualizer.EnsureOn(def.BuildingPreview, def, true);
+						LightRangeVisualizer.EnsureOn(def.BuildingPreview, def, true, false);
+					// 待施工：主视图选中时显示
 					if (def.BuildingUnderConstruction != null)
-						LightRangeVisualizer.EnsureOn(def.BuildingUnderConstruction, def, false);
-					LightRangeVisualizer.EnsureOn(def.BuildingComplete, def, false);
+						LightRangeVisualizer.EnsureOn(def.BuildingUnderConstruction, def, false, false);
+					// 已完成建筑：只在 F5 下且选中时显示
+					LightRangeVisualizer.EnsureOn(def.BuildingComplete, def, false, true);
 				}
 			}
 		}
