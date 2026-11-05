@@ -200,7 +200,8 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 				active = selected;
 			}
 
-			// 不 active 时清理内部网格并释放边框（此处不再是死代码）
+			// 【优化】不 active 时清理内部网格并释放边框（此处不再是死代码）
+			// 提前返回，绝对不进行后面的坐标计算和视野裁剪，大幅节省性能
 			if (!active) {
 				ReleaseBorderOwnership();
 				if (cells.Count > 0)
@@ -208,11 +209,11 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 				return;
 			}
 
-			// 【修复错位】如果拿到了 Light2D 实例，直接用它自己的位置和 Offset 计算。
-			// 这与原版引擎 Light2D.OnSpawn 里的计算方式 100% 相同，绝不会偏移。
+			// 【修复错位】如果拿到了 Light2D 实例，直接使用它自带的 cachedCell
+			// 引擎内部会自动处理移动、旋转和浮点误差，绝对不偏格。
 			int origin;
-			if (cachedLight != null) {
-				origin = Grid.PosToCell(cachedLight.transform.position + (Vector3)cachedLight.Offset);
+			if (cachedLight != null && Grid.IsValidCell(cachedLight.cachedCell)) {
+				origin = cachedLight.cachedCell;
 			} else {
 				// 兜底：对于没有 Light2D 的 BuildingPreview 只能用保存的 offset
 				origin = Grid.PosToCell(transform.GetPosition() + (Vector3)offset);
