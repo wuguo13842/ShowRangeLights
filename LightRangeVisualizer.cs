@@ -73,6 +73,9 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 		// 的模组实体。不缓存 null：组件可能后到，Update 会再查一次。
 		private KSelectable cachedSelectable;
 
+		// 缓存的 Light2D。有它在手，坐标计算和参数读取可以直接对齐原版引擎。
+		private Light2D cachedLight;
+
 		// 是否已经订阅选中事件（避免重复订阅）
 		private bool selectionSubscribed;
 
@@ -92,11 +95,12 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 		internal void CopyFrom(Light2D light, Transform root) {
 			if (light == null)
 				return;
+			cachedLight = light; // 缓存 Light2D，后续用于获取绝对精准的原点
 			range = Mathf.CeilToInt(light.Range);
 			shape = light.shape;
 			width = light.Width;
 			direction = light.LightDirection;
-			offset = light.Offset;
+			offset = (Vector2)(light.transform.position - root.position) + light.Offset;
 			lastTerrainVersion = -1;
 		}
 
@@ -204,7 +208,16 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 				return;
 			}
 
-			int origin = Grid.PosToCell(transform.GetPosition() + (Vector3)offset);
+			// 【修复错位】如果拿到了 Light2D 实例，直接用它自己的位置和 Offset 计算。
+			// 这与原版引擎 Light2D.OnSpawn 里的计算方式 100% 相同，绝不会偏移。
+			int origin;
+			if (cachedLight != null) {
+				origin = Grid.PosToCell(cachedLight.transform.position + (Vector3)cachedLight.Offset);
+			} else {
+				// 兜底：对于没有 Light2D 的 BuildingPreview 只能用保存的 offset
+				origin = Grid.PosToCell(transform.GetPosition() + (Vector3)offset);
+			}
+
 			if (range <= 0 || !Grid.IsValidCell(origin)) {
 				ReleaseBorderOwnership();
 				if (cells.Count > 0)
@@ -347,6 +360,7 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 				selectionSubscribed = false;
 			}
 			cachedSelectable = null;
+			cachedLight = null;
 			ReleaseBorderOwnership();
 			ClearAll();
 			while (effectPool.Count > 0) {
@@ -369,7 +383,8 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 			var shape = light.shape;
 			int width = light.Width;
 			var direction = light.LightDirection;
-			var offset = light.Offset;
+			var completeRoot = def.BuildingComplete.transform;
+			var offset = (Vector2)(light.transform.position - completeRoot.position) + light.Offset;
 
 			if (target.TryGetComponent(out KPrefabID prefabID)) {
 				prefabID.instantiateFn += (obj) => {
@@ -383,6 +398,8 @@ namespace ShowRangeLights { // 独立 Mod 命名空间
 					vis.offset = offset;
 					vis.defaultEnabled = defaultEnabled;
 					vis.overlayOnly = overlayOnly;
+					// 施工中的建筑自带 Light2D，直接抓取实例
+					vis.cachedLight = obj.GetComponentInChildren<Light2D>();
 					// 刻意不在这里设置 enabled：
 					// 若立即设 enabled = false，Unity 不会调用 Start → OnSpawn，
 					// 订阅就永远不会发生。让 Unity 走完生命周期；Update 里的
